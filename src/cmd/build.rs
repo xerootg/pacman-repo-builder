@@ -20,6 +20,37 @@ use std::{
     process::{Command, Stdio},
 };
 
+/// Check if a pacman command is yay or a yay-like AUR helper
+fn is_yay_command(pacman: Option<&str>) -> bool {
+    pacman
+        .map(|cmd| {
+            let cmd_lower = cmd.to_lowercase();
+            cmd_lower == "yay" || cmd_lower.ends_with("/yay")
+        })
+        .unwrap_or(false)
+}
+
+/// Extension trait to add yay-specific non-interactive flags
+trait YayCommandExt {
+    fn with_yay_flags(self, is_yay: bool) -> Self;
+}
+
+impl YayCommandExt for Command {
+    fn with_yay_flags(mut self, is_yay: bool) -> Self {
+        if is_yay {
+            // Disable interactive prompts for diffs, cleans, edits
+            self.arg("--answerdiff").arg("None")
+                .arg("--answerclean").arg("None")
+                .arg("--answeredit").arg("None")
+                // Remove make dependencies after build
+                .arg("--removemake")
+                // Set stdin to null to auto-select defaults for provider menus
+                .stdin(Stdio::null());
+        }
+        self
+    }
+}
+
 pub fn build(args: BuildArgs) -> Status {
     let BuildArgs {} = args;
 
@@ -126,9 +157,11 @@ pub fn build(args: BuildArgs) -> Status {
         if !force_rebuild && future_package_file_paths.iter().all(|path| path.exists()) {
             eprintln!("🛈 All packages are already built. Skip.");
 
+            let is_yay = is_yay_command(pacman);
             let status = pacman
                 .unwrap_or("pacman")
                 .pipe(Command::new)
+                .with_yay_flags(is_yay)
                 .with_arg("--upgrade")
                 .with_args(future_package_file_paths)
                 .with_arg("--noconfirm")
@@ -195,6 +228,7 @@ pub fn build(args: BuildArgs) -> Status {
             }
 
             if install_missing_dependencies && has_wanted {
+                let is_yay = is_yay_command(pacman);
                 macro_rules! run_pacman {
                     ($long:literal, $short:literal, $target:expr) => {
                         spawn_and_warn!(
@@ -202,6 +236,7 @@ pub fn build(args: BuildArgs) -> Status {
                             pacman
                                 .unwrap_or("pacman")
                                 .pipe(Command::new)
+                                .with_yay_flags(is_yay)
                                 .with_arg($long)
                                 .with_args($target)
                                 .with_arg("--noconfirm")
@@ -232,12 +267,14 @@ pub fn build(args: BuildArgs) -> Status {
             }
 
             if install_missing_dependencies && has_unwanted {
+                let is_yay = is_yay_command(pacman);
                 eprintln!("🛈 Removing conflicts...");
                 spawn_and_warn!(
                     "-R",
                     pacman
                         .unwrap_or("pacman")
                         .pipe(Command::new)
+                        .with_yay_flags(is_yay)
                         .with_arg("--remove")
                         .with_args(unwanted)
                         .with_arg("--unneeded")
